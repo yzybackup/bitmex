@@ -236,7 +236,9 @@ class ExchangeInterface:
     def get_ticker(self, symbol=None):
         if symbol is None:
             symbol = self.symbol
-        return self.bitmex.ticker_data(symbol)
+        ticker = self.bitmex.ticker_data(symbol)
+        self.current_price = ticker['mid']
+        return ticker
 
     def is_open(self):
         """Check that websockets are still open."""
@@ -286,6 +288,7 @@ class ExchangeInterface:
     def combination_strategy(self, ):
         operator = 0
         try:
+            self.candles_1m = pd.DataFrame(self.get_trade_bucket(binSize='1m'))
             self.candles_5m = pd.DataFrame(self.get_trade_bucket(binSize='5m'))
             self.candles_1h = pd.DataFrame(self.get_trade_bucket(binSize='1h'))
             self.candles_1d = pd.DataFrame(self.get_trade_bucket(binSize='1d'))
@@ -297,18 +300,47 @@ class ExchangeInterface:
         
         #operator += self.policy_EMA()
         
-        operator += self.policy_BBANDS_short()
+        #operator += self.policy_BBANDS_short()
         
         operator += self.policy_BBANDS_long()
         
         operator += self.policy_GUPPY()
         
-        if operator >= 10:
+        if operator >= 10 and self.price_limit(1) > 0:
             return 1
-        elif operator <= -10:
+        elif operator <= -10 and self.price_limit(-1) < 0:
             return -1
         return 0
     
+    def volume_limit(self, volume):
+        volume_values = np.array(volume[::-1], dtype='f8')
+        volume_macd, volume_signal, volume_hist = \
+                             talib.MACD(volume_values, 
+                                        fastperiod = 12, 
+                                        slowperiod = 26, 
+                                        signalperiod = 9)
+        volume_hist_1 = volume_hist[-1]
+        volume_hist_2 = volume_hist[-2]
+        logger.info('volume_hist_1: %s, volume_hist_2: %s' %
+                    (volume_hist_1, volume_hist_2))
+        if volume_hist_1 > 0:
+            return True
+        return False
+    
+    def price_limit(self, flags):
+        '''
+            近期高位不做多，低位不做空
+        '''
+        close_values_1h = self.candles_1h.close.values[::-1]
+        EMA_PRICE = talib.EMA(close_values_1h, timeperiod=3)
+        logger.info('the 1h ema_3 is: %s' % EMA_PRICE[-1])
+        
+        if flags < 0 and self.current_price > EMA_PRICE[-1] - 50:
+            return -1
+        if flags > 0 and self.current_price < EMA_PRICE[-1] + 50:
+            return 1
+        return 0
+
     def policy_GUPPY(self, ):
         '''
             顾比均线策略，选取3、5、8、10、12、15作为短期均线，
@@ -340,12 +372,9 @@ class ExchangeInterface:
                                         fastperiod = 12, 
                                         slowperiod = 26, 
                                         signalperiod = 9)
-        volume_values_5m = np.array(self.candles_5m.volume.values[::-1], dtype='f8')
-        volume_macd_5m, volume_signal_5m, volume_hist_5m = \
-                             talib.MACD(volume_values_5m, 
-                                        fastperiod = 12, 
-                                        slowperiod = 26, 
-                                        signalperiod = 9)
+        
+        volume_limit = self.volume_limit(self.candles_5m.volume.values)
+        
         SIG_FAST_3 = talib.EMA(close_values_5m, timeperiod=3)
         SIG_FAST_5 = talib.EMA(close_values_5m, timeperiod=5)
         SIG_FAST_8 = talib.EMA(close_values_5m, timeperiod=8)
@@ -406,7 +435,7 @@ class ExchangeInterface:
                            SIG_SLOW_60[-2],
                            ],
             
-            'volume_hist_5m': volume_hist_5m[-1],
+            'volume_limit': volume_limit,
             'hist_5m': hist_5m[-1],
             'trend': 0,
             'exchange_sig': 0,
@@ -434,37 +463,53 @@ class ExchangeInterface:
                 return -1
             return 0
         
-        def near_com(fast_list, slow_list, flags):
-            slow_list.sort()
-            fast_list.sort()
-            if flags == -1:
-                res = slow_list[-1] - fast_list[0]
-                if res < 10 and res > 0:
-                    return 1
-            elif flags == 1:
-               res = fast_list[-1] - slow_list[0]
-               if res < 10 and res > 0:
-                    return 1
+        def near_com(flags):
+            cross_sig = 0
+            pass_sig = 0
+            for i in range(-1, -21, -1):
+                slow_list = [
+                    SIG_SLOW_30[i],
+                    SIG_SLOW_35[i],
+                    SIG_SLOW_40[i],
+                    SIG_SLOW_45[i],
+                    SIG_SLOW_50[i],
+                    SIG_SLOW_60[i],
+                ]
+                fast_list = [
+                    SIG_FAST_3[i],
+                    SIG_FAST_5[i],
+                    SIG_FAST_8[i],
+                    SIG_FAST_10[i],
+                    SIG_FAST_12[i],
+                    SIG_FAST_15[i],
+                ]
+
+                if pass_sig==0 and list_com(fast_list, slow_list) == flags:
+                    pass_sig = abs(i)
+                    logger.info('pass_sig=%s:fast_list:%s,slow_list:%s' % (i, fast_list, slow_list))
+                if cross_sig==0 and list_com(fast_list, slow_list) == -flags:
+                    cross_sig = abs(i)
+                    logger.info('cross_sig=%s:fast_list:%s,slow_list:%s' % (i, fast_list, slow_list))
+            
+            if pass_sig and cross_sig and pass_sig < cross_sig:
+                return flags
+
             return 0
+
         logger.info('policy_data: %s' % policy_data)
+
         if list_com(policy_data['TREND_FAST'], policy_data['TREND_SLOW']) > 0:
             policy_data['trend'] = 1
         elif list_com(policy_data['TREND_FAST'], policy_data['TREND_SLOW']) < 0:
             policy_data['trend'] = -1
 
-        if policy_data['trend'] > 0 and policy_data['volume_hist_5m'] > 0 and \
-           policy_data['hist_5m'] > 0 and \
-           (list_com(policy_data['SIG_FAST_PRE'], policy_data['SIG_SLOW_PRE']) == 0 or \
-            near_com(policy_data['SIG_FAST'], policy_data['SIG_SLOW'], 1)) and \
-           list_com(policy_data['SIG_FAST'], policy_data['SIG_SLOW']) > 0:
+        if policy_data['trend'] > 0 and volume_limit and \
+           policy_data['hist_5m'] > 2 and near_com(1) == 1:
             # 做多信号
             policy_data['exchange_sig'] = 1
 
-        if policy_data['trend'] < 0 and policy_data['volume_hist_5m'] > 0 and \
-           policy_data['hist_5m'] < 0 and \
-           (list_com(policy_data['SIG_FAST_PRE'], policy_data['SIG_SLOW_PRE']) == 0 or \
-            near_com(policy_data['SIG_FAST'], policy_data['SIG_SLOW'], -1)) and \
-           list_com(policy_data['SIG_FAST'], policy_data['SIG_SLOW']) < 0:
+        if policy_data['trend'] < 0 and volume_limit and \
+           policy_data['hist_5m'] < -2 and near_com(-1) == -1:
             # 做空信号
             policy_data['exchange_sig'] = -1
         
@@ -530,7 +575,7 @@ class ExchangeInterface:
             # 做空
             policy_data['exchange_sig'] = -1
         if policy_data['volume_hist_1h'] > 0 and policy_data['hist_1h'] < 0 and \
-           policy_data['boll_w'] > 0.03 and policy_data['boll_b'] < -0.4:
+           policy_data['boll_w'] > 0.03 and policy_data['boll_b'] < -0.3:
             # 做多
             policy_data['exchange_sig'] = 1
 
@@ -546,6 +591,7 @@ class ExchangeInterface:
         logger.info('================end BBANDS_long policy====================')
         return policy_data['operator']
     
+    
     def policy_BBANDS_short(self, ):
         '''
             布林线短线策略
@@ -555,13 +601,10 @@ class ExchangeInterface:
             4. 5m放量才入场
         '''
         logger.info('================begin BBANDS_short policy====================')
-        volume_values_5m = np.array(self.candles_5m.volume.values[::-1], dtype='f8')
-        volume_macd_5m, volume_signal_5m, volume_hist_5m = \
-                             talib.MACD(volume_values_5m, 
-                                        fastperiod = 12, 
-                                        slowperiod = 26, 
-                                        signalperiod = 9)
-        close_values_5m = self.candles_5m.close.values[::-1]
+        
+        volume_limit = self.volume_limit(self.candles_1m.volume.values)
+        
+        close_values_5m = self.candles_1m.close.values[::-1]
         upper, middle, lower = \
             talib.BBANDS(close_values_5m,
                          timeperiod=20,
@@ -584,7 +627,7 @@ class ExchangeInterface:
             'hist_5m_3': hist_5m[-3],
             'hist_5m_2': hist_5m[-2],
             'hist_5m_1': hist_5m[-1],
-            'volume_hist_5m': volume_hist_5m[-1],
+            'volume_limit': volume_limit,
             'boll_w': (upper[-1] - lower[-1])/middle[-1],
             'boll_b':  (close_values_5m[-1] - lower[-1])/(upper[-1] - lower[-1]),  
             'exchange_sig': 0,
@@ -596,8 +639,8 @@ class ExchangeInterface:
            policy_data['hist_5m_4'] > policy_data['hist_5m_3'] and \
            policy_data['hist_5m_3'] > policy_data['hist_5m_2'] and \
            policy_data['hist_5m_2'] > policy_data['hist_5m_1'] and \
-           abs(policy_data['hist_5m_1']) > 2 and policy_data['hist_5m_3'] > 0 and\
-           policy_data['boll_w'] > 0.01 and policy_data['volume_hist_5m'] > 0:
+           abs(policy_data['hist_5m_1']) > 1 and policy_data['hist_5m_3'] > 0 and\
+           policy_data['boll_w'] > 0.005 and volume_limit:
             # 做空
             policy_data['exchange_sig'] = -1
         if policy_data['hist_5m_2'] > 0 and policy_data['hist_5m_1'] > 0 and \
@@ -605,8 +648,8 @@ class ExchangeInterface:
            policy_data['hist_5m_4'] < policy_data['hist_5m_3'] and \
            policy_data['hist_5m_3'] < policy_data['hist_5m_2'] and \
            policy_data['hist_5m_2'] < policy_data['hist_5m_1'] and \
-           abs(policy_data['hist_5m_1']) > 2 and policy_data['hist_5m_3'] < 0 and\
-           policy_data['boll_w'] > 0.01 and policy_data['volume_hist_5m'] > 0:
+           abs(policy_data['hist_5m_1']) > 1 and policy_data['hist_5m_3'] < 0 and\
+           policy_data['boll_w'] > 0.005 and volume_limit:
             # 做多
             policy_data['exchange_sig'] = 1
     
@@ -650,12 +693,9 @@ class ExchangeInterface:
                                         fastperiod = 12, 
                                         slowperiod = 26, 
                                         signalperiod = 9)
-        volume_values_5m = np.array(self.candles_5m.volume.values[::-1], dtype='f8')
-        volume_macd_5m, volume_signal_5m, volume_hist_5m = \
-                             talib.MACD(volume_values_5m, 
-                                        fastperiod = 12, 
-                                        slowperiod = 26, 
-                                        signalperiod = 9)
+        
+        volume_limit = self.volume_limit(self.candles_5m.volume.values)
+    
         policy_data = {
             'hist_1d_3': hist_1d[-3],
             'hist_1d_2': hist_1d[-2],
@@ -677,7 +717,7 @@ class ExchangeInterface:
             'hist_5m_3': hist_5m[-3],
             'hist_5m_2': hist_5m[-2],
             'hist_5m_1': hist_5m[-1],
-            'volume_hist_5m': volume_hist_5m[-1],
+            'volume_limit': volume_limit,
             'long_trend': 0,
             'short_trend': 0,
             'exchange_sig': 0,
@@ -693,33 +733,29 @@ class ExchangeInterface:
            policy_data['hist_1d_2'] < policy_data['hist_1d_1']:
             # 长线多头趋势
             policy_data['long_trend'] = 1
-        if policy_data['hist_1h_5'] > policy_data['hist_1h_4'] and \
-           policy_data['hist_1h_4'] > policy_data['hist_1h_3'] and \
-           policy_data['hist_1h_3'] > policy_data['hist_1h_2'] and \
+        if policy_data['hist_1h_3'] > policy_data['hist_1h_2'] and \
            policy_data['hist_1h_2'] > policy_data['hist_1h_1']:
             # 短线空头趋势
             policy_data['short_trend'] = -1
-        if policy_data['hist_1h_5'] < policy_data['hist_1h_4'] and \
-           policy_data['hist_1h_4'] < policy_data['hist_1h_3'] and \
-           policy_data['hist_1h_3'] < policy_data['hist_1h_2'] and \
+        if policy_data['hist_1h_3'] < policy_data['hist_1h_2'] and \
            policy_data['hist_1h_2'] < policy_data['hist_1h_1']:
             # 短线多头趋势
             policy_data['short_trend'] = 1
         
-        if policy_data['macd_5m_3'] > policy_data['signal_5m_3'] and \
-           policy_data['macd_5m_1'] < policy_data['signal_5m_1'] and \
+        if policy_data['hist_5m_4'] > 0 and \
+           policy_data['hist_5m_1'] < 0 and \
            policy_data['hist_5m_3'] > policy_data['hist_5m_2'] and \
            policy_data['hist_5m_2'] > policy_data['hist_5m_1'] and \
            policy_data['hist_5m_1'] < -1 and policy_data['short_trend'] < 0 and \
-           policy_data['long_trend'] < 0 and policy_data['volume_hist_5m'] > 0:
+           policy_data['long_trend'] < 0 and volume_limit:
             # 空头信号
             policy_data['exchange_sig'] = -1
-        if policy_data['macd_5m_3'] < policy_data['signal_5m_3'] and \
-           policy_data['macd_5m_1'] > policy_data['signal_5m_1'] and \
+        if policy_data['hist_5m_4'] < 0 and \
+           policy_data['hist_5m_1'] > 0 and \
            policy_data['hist_5m_3'] < policy_data['hist_5m_2'] and \
            policy_data['hist_5m_2'] < policy_data['hist_5m_1'] and \
            policy_data['hist_5m_1'] > 1 and policy_data['short_trend'] > 0 and \
-           policy_data['long_trend'] > 0 and policy_data['volume_hist_5m'] > 0:
+           policy_data['long_trend'] > 0 and volume_limit:
             # 多头信号
             policy_data['exchange_sig'] = 1
         
@@ -1040,7 +1076,7 @@ class OrderManager:
                 sell_limit = self.start_position_mid - settings.ORDER_LIMIT_STEP
                 if sell_limit < order.get('price'):
                     update_orders.append({'orderID': order.get('orderID'),
-                                          'price': sell_limit})
+                                          'price': sell_limit-10})
             # kong dan zhi sun
             if order.get('ordType') == 'Stop' and order.get('side') == 'Buy':
                 move_con = position_price - self.start_position_mid
@@ -1054,7 +1090,7 @@ class OrderManager:
                 buy_limit = self.start_position_mid + settings.ORDER_LIMIT_STEP
                 if buy_limit > order.get('price'):
                     update_orders.append({'orderID': order.get('orderID'),
-                                          'price': buy_limit})
+                                          'price': buy_limit+10})
             # duo dan zhi sun
             if order.get('ordType') == 'Stop' and order.get('side') == 'Sell':
                 move_con = self.start_position_mid - position_price
@@ -1233,7 +1269,7 @@ class OrderManager:
                     return self.place_orders()
                 else:
                     logger.error("Unknown error on amend: %s. Exiting" % errorObj)
-                    sys.exit(1)
+                    sys.exit()
 
         if len(to_create) > 0:
             logger.info("Creating %d orders:" % (len(to_create)))
@@ -1347,7 +1383,8 @@ class OrderManager:
 
     def restart(self):
         logger.info("Restarting the market maker...")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        sys.exit()
+        #os.execv(sys.executable, [sys.executable] + sys.argv)
 
 #
 # Helpers
