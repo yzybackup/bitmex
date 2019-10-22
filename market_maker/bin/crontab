@@ -1,6 +1,6 @@
-* * * * *  sh /home/py3/daemon.sh
-* * * * * sleep 10; sh /home/py3/daemon.sh
-* * * * * sleep 20; sh /home/py3/daemon.sh
-* * * * * sleep 30; sh /home/py3/daemon.sh
-* * * * * sleep 40; sh /home/py3/daemon.sh
-* * * * * sleep 50; sh /home/py3/daemon.sh
+* * * * *  sh /root/bitmex/market_maker/bin/daemon.sh
+* * * * * sleep 10; sh /root/bitmex/market_maker/bin/daemon.sh
+* * * * * sleep 20; sh /root/bitmex/market_maker/bin/daemon.sh
+* * * * * sleep 30; sh /root/bitmex/market_maker/bin/daemon.sh
+* * * * * sleep 40; sh /root/bitmex/market_maker/bin/daemon.sh
+* * * * * sleep 50; sh /root/bitmex/market_maker/bin/daemon.sh

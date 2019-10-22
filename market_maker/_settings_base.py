@@ -6,13 +6,13 @@ import logging
 ########################################################################################################################
 
 # API URL.
-BASE_URL = "https://testnet.bitmex.com/api/v1/"
-# BASE_URL = "https://www.bitmex.com/api/v1/" # Once you're ready, uncomment this.
+#BASE_URL = "https://testnet.bitmex.com/api/v1/"
+BASE_URL = "https://www.bitmex.com/api/v1/" # Once you're ready, uncomment this.
 
 # The BitMEX API requires permanent API keys. Go to https://testnet.bitmex.com/api/apiKeys to fill these out.
+
 API_KEY = ""
 API_SECRET = ""
-
 
 ########################################################################################################################
 # Target
@@ -120,8 +120,8 @@ CONTRACTS = ['XBTUSD']
 
 
 # STOP LIMIT
-ORDER_LIMIT_POINT = 200
-ORDER_LIMIT_STEP = 50
-ORDER_STOP_POINT = 200
-ORDER_MOVE_CONDITION = 80
-ORDER_STOP_STEP = 30
+ORDER_LIMIT_POINT = 500
+ORDER_LIMIT_STEP = 80
+ORDER_STOP_POINT = 3000
+ORDER_MOVE_CONDITION = 200
+ORDER_STOP_STEP = 50
