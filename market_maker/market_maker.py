@@ -1017,7 +1017,7 @@ class OrderManager:
             for i in range(len(orders)):
                 if orders[i]['ordType'] == 'Limit':
                     limit_order.append(orders.pop(i))
-            
+
             self.exchange.create_bulk_orders(orders)
             sleep(15)
             if limit_order:
@@ -1134,8 +1134,12 @@ class OrderManager:
                     "execInst": "Close"}
                 ]
             '''
+            #orders.append({'orderQty': quantity,
+            #               'ordType': 'Market',
+            #               'side': 'Buy'})
             orders.append({'orderQty': quantity,
-                           'ordType': 'Market',
+                           'ordType': 'MarketIfTouched',
+                           'stopPx': self.start_position_mid+10,
                            'side': 'Buy'})
             orders.append({'stopPx': self.start_position_mid-settings.ORDER_STOP_POINT,
                             'orderQty': quantity,
@@ -1175,8 +1179,12 @@ class OrderManager:
                     "execInst": "Close"}
                 ]
             '''
+            #orders.append({'orderQty': quantity,
+            #               'ordType': 'Market',
+            #               'side': 'Sell'})
             orders.append({'orderQty': quantity,
-                           'ordType': 'Market',
+                           'ordType': 'MarketIfTouched',
+                           'stopPx': self.start_position_mid-10,
                            'side': 'Sell'})
             orders.append({'stopPx': self.start_position_mid+settings.ORDER_STOP_POINT,
                             'orderQty': quantity,
@@ -1415,3 +1423,4 @@ def run():
     except (KeyboardInterrupt, SystemExit) as e:
         logger.exception(e)
         sys.exit()
+
